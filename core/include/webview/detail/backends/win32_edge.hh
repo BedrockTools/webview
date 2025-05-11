@@ -764,6 +764,14 @@ private:
           controller->AddRef();
           webview->AddRef();
           m_controller = controller;
+          
+          // Transparent background
+          ICoreWebView2Controller2 *controller2;
+          if (SUCCEEDED(controller->QueryInterface(IID_PPV_ARGS(&controller2)))) {
+            COREWEBVIEW2_COLOR transparentColor = {0, 0, 0, 0}; // RGBA
+            controller2->put_DefaultBackgroundColor(transparentColor);
+          };
+
           m_webview = webview;
           flag.clear();
         });
