@@ -311,11 +311,127 @@ private:
 
 class win32_edge_engine : public engine_base {
 public:
-  win32_edge_engine(bool debug, void *window) : engine_base{!window} {
-    window_init(window);
+  win32_edge_engine(bool debug, void *window, WNDPROC proc_handler,
+                    WNDPROC widget_handler)
+      : engine_base{!window} {
+    window_init(window,
+        proc_handler ? proc_handler : window_proc_handler,
+        widget_handler ? widget_handler : widget_proc_handler);
     window_settings(debug);
     dispatch_size_default();
-  }
+  };
+
+  win32_edge_engine(bool debug, void *window)
+      : win32_edge_engine(debug, window, window_proc_handler, widget_proc_handler) {};
+
+  win32_edge_engine(bool debug, void *window, WNDPROC proc_handler)
+      : win32_edge_engine(debug, window, proc_handler, widget_proc_handler) {};
+
+  static LRESULT CALLBACK window_proc_handler(HWND hwnd, UINT msg, WPARAM wp,
+                                              LPARAM lp) {
+    win32_edge_engine *w{};
+
+    if (msg == WM_NCCREATE) {
+      auto *lpcs{reinterpret_cast<LPCREATESTRUCT>(lp)};
+      w = static_cast<win32_edge_engine *>(lpcs->lpCreateParams);
+      w->m_window = hwnd;
+      SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(w));
+      enable_non_client_dpi_scaling_if_needed(hwnd);
+      apply_window_theme(hwnd);
+    } else {
+      w = reinterpret_cast<win32_edge_engine *>(
+          GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    }
+
+    if (!w) {
+      return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+
+    switch (msg) {
+    case WM_SIZE:
+      w->resize_widget();
+      break;
+    case WM_CLOSE:
+      DestroyWindow(hwnd);
+      break;
+    case WM_DESTROY:
+      w->m_window = nullptr;
+      SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+      w->on_window_destroyed();
+      break;
+    case WM_GETMINMAXINFO: {
+      auto lpmmi = (LPMINMAXINFO)lp;
+      if (w->m_maxsz.x > 0 && w->m_maxsz.y > 0) {
+        lpmmi->ptMaxSize = w->m_maxsz;
+        lpmmi->ptMaxTrackSize = w->m_maxsz;
+      }
+      if (w->m_minsz.x > 0 && w->m_minsz.y > 0) {
+        lpmmi->ptMinTrackSize = w->m_minsz;
+      }
+    } break;
+    case 0x02E4 /*WM_GETDPISCALEDSIZE*/: {
+      auto dpi = static_cast<int>(wp);
+      auto *size{reinterpret_cast<SIZE *>(lp)};
+      *size = w->get_scaled_size(w->m_dpi, dpi);
+      return TRUE;
+    }
+    case 0x02E0 /*WM_DPICHANGED*/: {
+      // Windows 10: The size we get here is exactly what we supplied to WM_GETDPISCALEDSIZE.
+      // Windows 11: The size we get here is NOT what we supplied to WM_GETDPISCALEDSIZE.
+      // Due to this difference, don't use the suggested bounds.
+      auto dpi = static_cast<int>(HIWORD(wp));
+      w->on_dpi_changed(dpi);
+      break;
+    }
+    case WM_SETTINGCHANGE: {
+      auto *area = reinterpret_cast<const wchar_t *>(lp);
+      if (area) {
+        w->on_system_setting_change(area);
+      }
+      break;
+    }
+    case WM_ACTIVATE:
+      if (LOWORD(wp) != WA_INACTIVE) {
+        w->focus_webview();
+      }
+      break;
+    default:
+      return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+    return 0;
+  };
+  
+  static LRESULT CALLBACK widget_proc_handler(HWND hwnd, UINT msg, WPARAM wp,
+                                              LPARAM lp) {
+    win32_edge_engine *w{};
+
+    if (msg == WM_NCCREATE) {
+      auto *lpcs{reinterpret_cast<LPCREATESTRUCT>(lp)};
+      w = static_cast<win32_edge_engine *>(lpcs->lpCreateParams);
+      w->m_widget = hwnd;
+      SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(w));
+    } else {
+      w = reinterpret_cast<win32_edge_engine *>(
+          GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    }
+
+    if (!w) {
+      return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+
+    switch (msg) {
+    case WM_SIZE:
+      w->resize_webview();
+      break;
+    case WM_DESTROY:
+      w->m_widget = nullptr;
+      SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+      break;
+    default:
+      return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+    return 0;
+  };
 
   virtual ~win32_edge_engine() {
     if (m_com_handler) {
@@ -507,7 +623,7 @@ protected:
   }
 
 private:
-  void window_init(void *window) {
+  void window_init(void *window, WNDPROC window_proc, WNDPROC widget_proc) {
     if (!is_webview2_available()) {
       throw exception{WEBVIEW_ERROR_MISSING_DEPENDENCY,
                       "WebView2 is unavailable"};
@@ -530,79 +646,7 @@ private:
       wc.hInstance = hInstance;
       wc.lpszClassName = L"webview";
       wc.hIcon = icon;
-      wc.lpfnWndProc = (WNDPROC)(+[](HWND hwnd, UINT msg, WPARAM wp,
-                                     LPARAM lp) -> LRESULT {
-        win32_edge_engine *w{};
-
-        if (msg == WM_NCCREATE) {
-          auto *lpcs{reinterpret_cast<LPCREATESTRUCT>(lp)};
-          w = static_cast<win32_edge_engine *>(lpcs->lpCreateParams);
-          w->m_window = hwnd;
-          SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(w));
-          enable_non_client_dpi_scaling_if_needed(hwnd);
-          apply_window_theme(hwnd);
-        } else {
-          w = reinterpret_cast<win32_edge_engine *>(
-              GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-        }
-
-        if (!w) {
-          return DefWindowProcW(hwnd, msg, wp, lp);
-        }
-
-        switch (msg) {
-        case WM_SIZE:
-          w->resize_widget();
-          break;
-        case WM_CLOSE:
-          DestroyWindow(hwnd);
-          break;
-        case WM_DESTROY:
-          w->m_window = nullptr;
-          SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-          w->on_window_destroyed();
-          break;
-        case WM_GETMINMAXINFO: {
-          auto lpmmi = (LPMINMAXINFO)lp;
-          if (w->m_maxsz.x > 0 && w->m_maxsz.y > 0) {
-            lpmmi->ptMaxSize = w->m_maxsz;
-            lpmmi->ptMaxTrackSize = w->m_maxsz;
-          }
-          if (w->m_minsz.x > 0 && w->m_minsz.y > 0) {
-            lpmmi->ptMinTrackSize = w->m_minsz;
-          }
-        } break;
-        case 0x02E4 /*WM_GETDPISCALEDSIZE*/: {
-          auto dpi = static_cast<int>(wp);
-          auto *size{reinterpret_cast<SIZE *>(lp)};
-          *size = w->get_scaled_size(w->m_dpi, dpi);
-          return TRUE;
-        }
-        case 0x02E0 /*WM_DPICHANGED*/: {
-          // Windows 10: The size we get here is exactly what we supplied to WM_GETDPISCALEDSIZE.
-          // Windows 11: The size we get here is NOT what we supplied to WM_GETDPISCALEDSIZE.
-          // Due to this difference, don't use the suggested bounds.
-          auto dpi = static_cast<int>(HIWORD(wp));
-          w->on_dpi_changed(dpi);
-          break;
-        }
-        case WM_SETTINGCHANGE: {
-          auto *area = reinterpret_cast<const wchar_t *>(lp);
-          if (area) {
-            w->on_system_setting_change(area);
-          }
-          break;
-        }
-        case WM_ACTIVATE:
-          if (LOWORD(wp) != WA_INACTIVE) {
-            w->focus_webview();
-          }
-          break;
-        default:
-          return DefWindowProcW(hwnd, msg, wp, lp);
-        }
-        return 0;
-      });
+      wc.lpfnWndProc = window_proc;
       RegisterClassExW(&wc);
 
       CreateWindowW(L"webview", L"", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
@@ -624,37 +668,7 @@ private:
     widget_wc.cbSize = sizeof(WNDCLASSEX);
     widget_wc.hInstance = hInstance;
     widget_wc.lpszClassName = L"webview_widget";
-    widget_wc.lpfnWndProc = (WNDPROC)(+[](HWND hwnd, UINT msg, WPARAM wp,
-                                          LPARAM lp) -> LRESULT {
-      win32_edge_engine *w{};
-
-      if (msg == WM_NCCREATE) {
-        auto *lpcs{reinterpret_cast<LPCREATESTRUCT>(lp)};
-        w = static_cast<win32_edge_engine *>(lpcs->lpCreateParams);
-        w->m_widget = hwnd;
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(w));
-      } else {
-        w = reinterpret_cast<win32_edge_engine *>(
-            GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-      }
-
-      if (!w) {
-        return DefWindowProcW(hwnd, msg, wp, lp);
-      }
-
-      switch (msg) {
-      case WM_SIZE:
-        w->resize_webview();
-        break;
-      case WM_DESTROY:
-        w->m_widget = nullptr;
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-        break;
-      default:
-        return DefWindowProcW(hwnd, msg, wp, lp);
-      }
-      return 0;
-    });
+    widget_wc.lpfnWndProc = widget_proc;
     RegisterClassExW(&widget_wc);
     CreateWindowExW(WS_EX_CONTROLPARENT, L"webview_widget", nullptr, WS_CHILD,
                     0, 0, 0, 0, m_window, nullptr, hInstance, this);
