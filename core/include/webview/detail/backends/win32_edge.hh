@@ -72,6 +72,8 @@
 #include <shlobj.h>
 #include <shlwapi.h>
 
+#include "src/common/util/Logger.hpp"
+
 #ifdef _MSC_VER
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -311,9 +313,10 @@ private:
 
 class win32_edge_engine : public engine_base {
 public:
-  win32_edge_engine(bool debug, void *window, WNDPROC proc_handler,
+  win32_edge_engine(bool debug, void *window, std::string data_folder, WNDPROC proc_handler,
                     WNDPROC widget_handler)
       : engine_base{!window} {
+    m_data_folder = data_folder;
     window_init(window,
         proc_handler ? proc_handler : window_proc_handler,
         widget_handler ? widget_handler : widget_proc_handler);
@@ -322,10 +325,10 @@ public:
   };
 
   win32_edge_engine(bool debug, void *window)
-      : win32_edge_engine(debug, window, window_proc_handler, widget_proc_handler) {};
+      : win32_edge_engine(debug, window, "", window_proc_handler, widget_proc_handler) {};
 
   win32_edge_engine(bool debug, void *window, WNDPROC proc_handler)
-      : win32_edge_engine(debug, window, proc_handler, widget_proc_handler) {};
+      : win32_edge_engine(debug, window, "", proc_handler, widget_proc_handler) {};
 
   static LRESULT CALLBACK window_proc_handler(HWND hwnd, UINT msg, WPARAM wp,
                                               LPARAM lp) {
@@ -486,7 +489,6 @@ public:
   win32_edge_engine &operator=(const win32_edge_engine &other) = delete;
   win32_edge_engine(win32_edge_engine &&other) = delete;
   win32_edge_engine &operator=(win32_edge_engine &&other) = delete;
-
 protected:
   noresult run_impl() override {
     MSG msg;
@@ -742,17 +744,25 @@ private:
     std::atomic_flag flag = ATOMIC_FLAG_INIT;
     flag.test_and_set();
 
-    wchar_t currentExePath[MAX_PATH];
-    GetModuleFileNameW(nullptr, currentExePath, MAX_PATH);
-    wchar_t *currentExeName = PathFindFileNameW(currentExePath);
-
-    wchar_t dataPath[MAX_PATH];
-    if (!SUCCEEDED(
-            SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, dataPath))) {
-      return error_info{WEBVIEW_ERROR_UNSPECIFIED, "SHGetFolderPathW failed"};
-    }
     wchar_t userDataFolder[MAX_PATH];
-    PathCombineW(userDataFolder, dataPath, currentExeName);
+    Logger::log(Logger::LogLevel::Debug, m_data_folder);
+    if (m_data_folder.empty())
+    {
+      wchar_t currentExePath[MAX_PATH];
+      GetModuleFileNameW(nullptr, currentExePath, MAX_PATH);
+      wchar_t *currentExeName = PathFindFileNameW(currentExePath);
+
+      wchar_t dataPath[MAX_PATH];
+      if (!SUCCEEDED(
+              SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, dataPath))) {
+        return error_info{WEBVIEW_ERROR_UNSPECIFIED, "SHGetFolderPathW failed"};
+              }
+      PathCombineW(userDataFolder, dataPath, currentExeName);
+    }
+    else {
+      std::wstring dataFolder(m_data_folder.begin(), m_data_folder.end());
+      wcscpy_s(userDataFolder, sizeof(userDataFolder) / sizeof(wchar_t), dataFolder.c_str());
+    };
 
     m_com_handler = new webview2_com_handler(
         wnd, cb,
@@ -909,6 +919,7 @@ private:
   HWND m_window = nullptr;
   HWND m_widget = nullptr;
   HWND m_message_window = nullptr;
+  std::string m_data_folder;
   POINT m_minsz = POINT{0, 0};
   POINT m_maxsz = POINT{0, 0};
   DWORD m_main_thread = GetCurrentThreadId();
