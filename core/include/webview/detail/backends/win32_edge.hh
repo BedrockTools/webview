@@ -72,8 +72,6 @@
 #include <shlobj.h>
 #include <shlwapi.h>
 
-#include "src/common/util/Logger.hpp"
-
 #ifdef _MSC_VER
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -313,22 +311,15 @@ private:
 
 class win32_edge_engine : public engine_base {
 public:
-  win32_edge_engine(bool debug, void *window, std::string data_folder, WNDPROC proc_handler,
-                    WNDPROC widget_handler)
+  win32_edge_engine(bool debug, void *window, WNDPROC proc_handler = nullptr,
+                    WNDPROC widget_handler = nullptr)
       : engine_base{!window} {
-    m_data_folder = data_folder;
     window_init(window,
         proc_handler ? proc_handler : window_proc_handler,
         widget_handler ? widget_handler : widget_proc_handler);
     window_settings(debug);
     dispatch_size_default();
   };
-
-  win32_edge_engine(bool debug, void *window)
-      : win32_edge_engine(debug, window, "", window_proc_handler, widget_proc_handler) {};
-
-  win32_edge_engine(bool debug, void *window, WNDPROC proc_handler)
-      : win32_edge_engine(debug, window, "", proc_handler, widget_proc_handler) {};
 
   static LRESULT CALLBACK window_proc_handler(HWND hwnd, UINT msg, WPARAM wp,
                                               LPARAM lp) {
@@ -484,6 +475,9 @@ public:
       m_message_window = nullptr;
     }
   }
+
+  static void set_window_style(DWORD style) { m_window_style = style; };
+  static void set_data_path(const std::string& path) { m_data_folder = path; };
 
   win32_edge_engine(const win32_edge_engine &other) = delete;
   win32_edge_engine &operator=(const win32_edge_engine &other) = delete;
@@ -651,7 +645,7 @@ private:
       wc.lpfnWndProc = window_proc;
       RegisterClassExW(&wc);
 
-      CreateWindowW(L"webview", L"", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+      CreateWindowW(L"webview", L"", m_window_style, CW_USEDEFAULT,
                     CW_USEDEFAULT, 0, 0, nullptr, nullptr, hInstance, this);
       if (!m_window) {
         throw exception{WEBVIEW_ERROR_INVALID_STATE, "Window is null"};
@@ -745,7 +739,6 @@ private:
     flag.test_and_set();
 
     wchar_t userDataFolder[MAX_PATH];
-    Logger::log(Logger::LogLevel::Debug, m_data_folder);
     if (m_data_folder.empty())
     {
       wchar_t currentExePath[MAX_PATH];
@@ -919,7 +912,8 @@ private:
   HWND m_window = nullptr;
   HWND m_widget = nullptr;
   HWND m_message_window = nullptr;
-  std::string m_data_folder;
+  inline static DWORD m_window_style = WS_OVERLAPPEDWINDOW;
+  inline static std::string m_data_folder;
   POINT m_minsz = POINT{0, 0};
   POINT m_maxsz = POINT{0, 0};
   DWORD m_main_thread = GetCurrentThreadId();
@@ -930,7 +924,6 @@ private:
   int m_dpi{};
   bool m_is_window_shown{};
 };
-
 } // namespace detail
 
 using browser_engine = detail::win32_edge_engine;
