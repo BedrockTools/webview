@@ -311,7 +311,7 @@ private:
 
 class win32_edge_engine : public engine_base {
 public:
-  win32_edge_engine(bool debug, void *window, bool apply_theme, WNDPROC proc_handler = nullptr,
+  win32_edge_engine(bool debug, void *window, bool apply_theme = false, WNDPROC proc_handler = nullptr,
                     WNDPROC widget_handler = nullptr)
       : engine_base{!window} {
     m_apply_theme = apply_theme;
