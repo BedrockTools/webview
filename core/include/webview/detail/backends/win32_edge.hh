@@ -311,9 +311,10 @@ private:
 
 class win32_edge_engine : public engine_base {
 public:
-  win32_edge_engine(bool debug, void *window, WNDPROC proc_handler = nullptr,
+  win32_edge_engine(bool debug, void *window, bool apply_theme, WNDPROC proc_handler = nullptr,
                     WNDPROC widget_handler = nullptr)
       : engine_base{!window} {
+    m_apply_theme = apply_theme;
     window_init(window,
         proc_handler ? proc_handler : window_proc_handler,
         widget_handler ? widget_handler : widget_proc_handler);
@@ -331,7 +332,10 @@ public:
       w->m_window = hwnd;
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(w));
       enable_non_client_dpi_scaling_if_needed(hwnd);
-      apply_window_theme(hwnd);
+      if (true == m_apply_theme)
+      {
+        apply_window_theme(hwnd);
+      };
     } else {
       w = reinterpret_cast<win32_edge_engine *>(
           GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -891,6 +895,9 @@ private:
   }
 
   void on_system_setting_change(const wchar_t *area) {
+    if (false == m_apply_theme)
+      return;
+    
     // Detect light/dark mode change in system.
     if (lstrcmpW(area, L"ImmersiveColorSet") == 0) {
       apply_window_theme(m_window);
@@ -914,6 +921,7 @@ private:
   HWND m_message_window = nullptr;
   inline static DWORD m_window_style = WS_OVERLAPPEDWINDOW;
   inline static std::string m_data_folder;
+  inline static bool m_apply_theme;
   POINT m_minsz = POINT{0, 0};
   POINT m_maxsz = POINT{0, 0};
   DWORD m_main_thread = GetCurrentThreadId();
